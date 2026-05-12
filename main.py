@@ -11,6 +11,7 @@ import html
 import os
 import copy
 import socket
+import gc  # Added for Memory Management
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask
 from datetime import datetime
@@ -34,7 +35,8 @@ except Exception as e:
 
 # --- Configuration & Master Admin ---
 TOKEN = '8702711931:AAFoQ8x9uwu9t44mgJcL3O4pIq25vp7t1GQ'
-bot = telebot.TeleBot(TOKEN, parse_mode='HTML', num_threads=50)
+# Thread Pool 50 থেকে কমিয়ে 15 করা হয়েছে (Render 512MB RAM Limit এর জন্য)
+bot = telebot.TeleBot(TOKEN, parse_mode='HTML', num_threads=15)
 
 # MASTER DEVELOPER ID 
 DEVELOPER_ID = "6670461311"
@@ -560,8 +562,8 @@ def send_mail_alert(chat_id, account, msg_data, email_addr):
         account['msg_ids'].append(sent_msg.message_id)
     except: pass
 
-# High-Performance ThreadPool for Auto Checking Mail
-check_executor = ThreadPoolExecutor(max_workers=100)
+# --- Memory Optimized ThreadPool (Max 20 workers to prevent 512MB RAM Crash) ---
+check_executor = ThreadPoolExecutor(max_workers=20)
 
 def auto_check_mail():
     while True:
@@ -571,7 +573,10 @@ def auto_check_mail():
                 if data.get('accounts'):
                     check_executor.submit(check_mail_for_account, chat_id, data['accounts'][0])
         except: pass
-        time.sleep(4)
+        
+        # --- Memory Cleanup ---
+        gc.collect() 
+        time.sleep(8) 
 
 # --- Init User ---
 def init_user(message):
@@ -794,7 +799,7 @@ def process_unban(message):
     if not message.text.isdigit(): return
     banned_users.discard(message.text.strip())
     save_system_data()
-    bot.send_message(message.chat.id, f"✅ <b>{message.text}</b> অ্যাকাউন্ট অ্যাক্টিভ করা অ্যাক্টিভ করা হয়েছে!", reply_markup=get_back_button())
+    bot.send_message(message.chat.id, f"✅ <b>{message.text}</b> অ্যাকাউন্ট অ্যাক্টিভ করা হয়েছে!", reply_markup=get_back_button())
 
 def process_promo_text(message):
     bot.clear_step_handler_by_chat_id(message.chat.id)
@@ -832,7 +837,7 @@ def handle_callback(call):
     if call.data == "verify_join":
         unjoined = get_unjoined_channels(call.from_user.id)
         if unjoined:
-            bot.answer_callback_query(call.id, "❌ আপনি এখনো সকল চ্যানেলে জয়েন করেননি!", show_alert=True)
+            bot.answer_callback_query(callback_query_id=call.id, text="❌ আপনি এখনো সকল চ্যানেলে জয়েন করেননি!", show_alert=True)
         else:
             bot.delete_message(chat_id, call.message.message_id)
             bot.send_message(chat_id, "✅ <b>Verified Successfully!</b>\n\nস্বাগতম! মেনু থেকে অপশন বেছে নিন।", reply_markup=get_main_menu(chat_id))
@@ -898,10 +903,8 @@ def handle_callback(call):
         
         srv_name = "Mail.gw" if new_pref == "mailgw" else "Inboxes.com" if new_pref == "inboxes" else "Mail.td"
         
-        # 1. First trigger the popup alert immediately
         bot.answer_callback_query(callback_query_id=call.id, text=f"✅ Server Updated to {srv_name}!", show_alert=True)
         
-        # 2. Then edit the inline keyboard checkmarks
         curr_srv = new_pref
         markup = InlineKeyboardMarkup(row_width=1)
         markup.add(
@@ -1054,7 +1057,7 @@ if __name__ == "__main__":
     load_all_data_from_firebase()
     threading.Thread(target=run_web_server, daemon=True).start()
     threading.Thread(target=auto_check_mail, daemon=True).start()
-    print("🚀 Pro Mail Bot (Failover + Inboxes Update) is Live...")
+    print("🚀 Pro Mail Bot (Memory Optimized + Fully Featured) is Live...")
     while True:
         try: bot.polling(none_stop=True, interval=0, timeout=20)
         except Exception: time.sleep(5)
