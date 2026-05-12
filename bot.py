@@ -16,7 +16,7 @@ import gc
 
 # --- Global Configurations ---
 socket.setdefaulttimeout(15)
-TOKEN = '8789592665:AAFX1Nlx6ArxpR3kgbTNWIerVN9V6GyeCMc'
+TOKEN = '8702711931:AAFoQ8x9uwu9t44mgJcL3O4pIq25vp7t1GQ'
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML', num_threads=30)
 
 DEVELOPER_ID = "6670461311"
