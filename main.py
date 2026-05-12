@@ -10,8 +10,12 @@ import string
 import html
 import os
 import copy
+import socket
 from flask import Flask
 from datetime import datetime
+
+# --- Global Socket Timeout (Fixes API Hanging Issue) ---
+socket.setdefaulttimeout(15)
 
 # --- Firebase Admin Initialization ---
 import firebase_admin
@@ -29,13 +33,14 @@ except Exception as e:
 
 # --- Configuration & Master Admin ---
 TOKEN = '8702711931:AAFoQ8x9uwu9t44mgJcL3O4pIq25vp7t1GQ'
-bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
+# Thread Pool বাড়িয়ে 20 করা হয়েছে যেন ইউজার বেশি হলেও বট হ্যাং না করে
+bot = telebot.TeleBot(TOKEN, parse_mode='HTML', num_threads=20)
 
-# MASTER DEVELOPER ID (আপনার আইডি - যা কখনোই রিমুভ বা ব্যান হবে না)
+# MASTER DEVELOPER ID 
 DEVELOPER_ID = "6670461311"
 
-# NEW ADMIN IDs (নতুন অ্যাডমিনদের আইডি এইখানে কমা দিয়ে বসাবেন)
-CO_ADMINS = ["7434118198"] 
+# NEW ADMIN IDs 
+CO_ADMINS = [] 
 
 # --- Global Storage (Hybrid Memory) ---
 user_data = {}
@@ -67,7 +72,7 @@ def get_unjoined_channels(user_id):
             if status in ['left', 'kicked']: 
                 unjoined.append(ch)
         except Exception:
-            pass # Bot might not be admin, ignore to avoid blocking users
+            pass 
     return unjoined
 
 def send_force_join(chat_id, unjoined_channels):
@@ -211,7 +216,7 @@ def create_mail_with_server(chat_id, clean_name=None):
                 raise Exception("NameTaken")
             if 'token' in locals(): failed_tokens.add(token)
 
-    raise Exception(f"All Mail.td APIs Failed!")
+    raise Exception(f"All Mail.td APIs Failed! (Server Timeout or Keys Exhausted)")
 
 # --- Web Server ---
 app = Flask('')
@@ -268,7 +273,7 @@ def handle_suspension(chat_id):
         f"<i>(Tap ID to copy)</i>\n\n"
         f"অ্যাকাউন্ট রিকভার করতে আপনার User ID কপি করে অ্যাডমিনের সাথে যোগাযোগ করুন।"
     )
-    markup = InlineKeyboardMarkup().add(InlineKeyboardButton("👨‍💻 Contact Admin", url="https://t.me/tamim_king77"))
+    markup = InlineKeyboardMarkup().add(InlineKeyboardButton("👨‍💻 Contact Admin", url="https://t.me/Ad_Walid"))
     try: bot.send_message(chat_id, suspend_msg, reply_markup=markup, disable_web_page_preview=True)
     except: pass
 
@@ -368,10 +373,14 @@ def generate_mail_layout(email_address, srv_type='mailtd'):
 # --- Mail Fetching Engine ---
 def check_mail_for_account(chat_id, account):
     acc_token = account.get('api_token', '')
-    account_id = account['account_id']
+    account_id = account.get('account_id', '')
     email_addr = account['email']
     needs_sync = False
     
+    # Old Tmailor accounts bypass to prevent errors
+    if account.get('server_type') == 'tmailor' or account_id == 'tmailor_acc':
+        return 0
+        
     if acc_token not in api_clients: api_clients[acc_token] = MailTD(acc_token)
     temp_client = api_clients[acc_token]
     messages_to_process = []
@@ -441,8 +450,9 @@ def auto_check_mail():
                 active_index = data.get('active_index', -1)
                 if active_index >= 0 and data['accounts']:
                     check_mail_for_account(chat_id, data['accounts'][active_index])
+                    time.sleep(0.5) # Server API Limit Protection
         except: pass
-        time.sleep(3)
+        time.sleep(5)
 
 # --- Init User ---
 def init_user(message):
@@ -490,7 +500,6 @@ def handle_text(message):
         bot.send_message(chat_id, "🛠 <b>Bot Under Maintenance!</b>\n\nআপডেটের কাজ চলছে। দয়া করে কিছুক্ষণ পর আবার চেষ্টা করুন।")
         return
 
-    # Check Mandatory Channels
     unjoined = get_unjoined_channels(message.from_user.id)
     if unjoined:
         send_force_join(chat_id, unjoined)
@@ -519,7 +528,8 @@ def handle_text(message):
             save_user_data(chat_id)
             save_system_data()
         except Exception as e:
-            bot.edit_message_text(f"❌ Error Details: {str(e)}", chat_id, anim_msg.message_id)
+            # FIX: Used html.escape to prevent HTML Parse Error crashing the bot thread
+            bot.edit_message_text(f"❌ Error Details: {html.escape(str(e))}", chat_id, anim_msg.message_id)
 
     elif text == "✏️ Custom ID":
         if check_anti_spam(chat_id): return
@@ -571,7 +581,7 @@ def handle_text(message):
             "• Engine: MailTD Architecture\n"
             "• Performance: Zero-Lag Sync & Anti-Spam\n"
             "• Developer: <a href='https://t.me/Ad_Walid'>Md Walid</a>\n"
-            "• Bot Admin: <a href='https://t.me/tamim_king77'>Tamim</a>\n\n"
+            "• Bot Admin: <a href='https://t.me/Ad_Walid'>Md Walid</a>\n\n"
             "<i>Crafted with modern interface aesthetics.</i>"
         )
         bot.send_message(chat_id, about_text, disable_web_page_preview=True)
@@ -619,7 +629,8 @@ def process_custom_mail(message):
             save_user_data(chat_id)
             bot.register_next_step_handler(msg, process_custom_mail)
         else:
-            bot.edit_message_text(f"❌ Error Details: {str(e)}", chat_id, anim_msg.message_id)
+            # FIX: Escaping Error HTML to prevent bot crashing 
+            bot.edit_message_text(f"❌ Error Details: {html.escape(str(e))}", chat_id, anim_msg.message_id)
 
 # --- Admin Other Functions ---
 def process_add_api(message):
@@ -742,7 +753,7 @@ def handle_callback(call):
             save_user_data(chat_id)
             save_system_data()
         except Exception as e:
-            bot.edit_message_text(f"❌ Error Details: {str(e)}", chat_id, anim_msg.message_id)
+            bot.edit_message_text(f"❌ Error Details: {html.escape(str(e))}", chat_id, anim_msg.message_id)
 
     elif call.data.startswith('switch_'):
         idx = int(call.data.split('_')[1])
@@ -903,7 +914,7 @@ if __name__ == "__main__":
     load_all_data_from_firebase()
     threading.Thread(target=run_web_server, daemon=True).start()
     threading.Thread(target=auto_check_mail, daemon=True).start()
-    print("🚀 Pro Mail Bot (Updated V2) is Live...")
+    print("🚀 Pro Mail Bot (Updated V2 Fixed) is Live...")
     while True:
         try: bot.polling(none_stop=True, interval=0, timeout=20)
         except Exception: time.sleep(5)
