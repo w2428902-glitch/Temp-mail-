@@ -179,7 +179,7 @@ def get_active_client(exclude_tokens=None):
     valid_tokens = [t for t in api_data.get(token_key, []) if len(t) > 5 and t not in exclude_tokens]
     
     if not valid_tokens: 
-        raise Exception(f"No API Tokens found for Mail.td! Please add API from Admin Panel.")
+        raise Exception(f"NoToken")
 
     idx = api_data['active_idx'].get('mailtd', 0)
     for _ in range(len(api_data[token_key])):
@@ -195,58 +195,76 @@ def get_active_client(exclude_tokens=None):
             else:
                 mark_api_exhausted(token)
                 
-    raise Exception(f"All Mail.td APIs Exhausted!")
+    raise Exception(f"Exhausted")
 
 def create_mail_with_server(chat_id, clean_name=None):
     pref = user_data[chat_id].get('server_pref', 'mailtd')
     
-    if pref == 'mailgw':
+    # Auto-Fallback Queue: Priority 1: Preferred, then try others automatically
+    servers_to_try = [pref]
+    for s in ['mailtd', 'mailgw', 'inboxes']:
+        if s != pref: servers_to_try.append(s)
+        
+    last_error = ""
+    
+    for srv in servers_to_try:
         try:
-            domains_resp = requests.get("https://api.mail.gw/domains", timeout=15).json()
-            domain = domains_resp['hydra:member'][0]['domain']
-            username = clean_name if clean_name else ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
-            email_address = f"{username}@{domain}"
-            password = "ProPassword123!"
-            
-            acc_resp = requests.post("https://api.mail.gw/accounts", json={"address": email_address, "password": password}, timeout=15)
-            if acc_resp.status_code == 422:
-                raise Exception("NameTaken")
-            elif acc_resp.status_code not in [200, 201]:
-                raise Exception(f"Mail.gw Server Error {acc_resp.status_code}")
-            
-            tok_resp = requests.post("https://api.mail.gw/token", json={"address": email_address, "password": password}, timeout=15).json()
-            return acc_resp.json()['id'], email_address, tok_resp['token'], 'mailgw'
-            
+            if srv == 'mailgw':
+                domains_resp = requests.get("https://api.mail.gw/domains", timeout=10).json()
+                domain = domains_resp['hydra:member'][0]['domain']
+                username = clean_name if clean_name else ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+                email_address = f"{username}@{domain}"
+                password = "ProPassword123!"
+                
+                acc_resp = requests.post("https://api.mail.gw/accounts", json={"address": email_address, "password": password}, timeout=10)
+                if acc_resp.status_code == 422:
+                    raise Exception("NameTaken")
+                elif acc_resp.status_code not in [200, 201]:
+                    raise Exception(f"Mail.gw Server Error {acc_resp.status_code}")
+                
+                tok_resp = requests.post("https://api.mail.gw/token", json={"address": email_address, "password": password}, timeout=10).json()
+                return acc_resp.json()['id'], email_address, tok_resp['token'], 'mailgw'
+                
+            elif srv == 'inboxes':
+                domain_resp = requests.get("https://www.1secmail.com/api/v1/?action=getDomainList", timeout=10).json()
+                domain = domain_resp[0]
+                username = clean_name if clean_name else ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
+                email_address = f"{username}@{domain}"
+                return f"{username}:{domain}", email_address, "none", 'inboxes'
+
+            else:
+                # Default Mail.td
+                token_key = "mailtd_tokens"
+                if not api_data.get(token_key, []):
+                    raise Exception(f"NoToken")
+                    
+                failed_tokens = set()
+                for _ in range(len(api_data.get(token_key, []))):
+                    try:
+                        client, token = get_active_client(exclude_tokens=failed_tokens)
+                        domains = client.accounts.list_domains()
+                        domain_name = domains[0].domain if hasattr(domains[0], 'domain') else domains[0]
+                        email_address = f"{clean_name}@{domain_name}" if clean_name else f"{''.join(random.choices(string.ascii_lowercase + string.digits, k=8))}@{domain_name}"
+                        account = client.accounts.create(email_address, password="propassword123")
+                        return account.id, account.address, token, 'mailtd'
+                    except Exception as e:
+                        error_msg = str(e).lower()
+                        if clean_name and ("already exists" in error_msg or "taken" in error_msg or "400" in error_msg):
+                            raise Exception("NameTaken")
+                        if 'token' in locals(): failed_tokens.add(token)
+
+                raise Exception(f"Mail.td Exhausted")
+                
         except Exception as e:
             if str(e) == "NameTaken": raise
-            raise Exception(f"Mail.gw Error: {str(e)}")
+            last_error = str(e)
+            continue # If normal error, fall back to the next server automatically
 
-    else:
-        # Default Mail.td
-        token_key = "mailtd_tokens"
-        if not api_data.get(token_key, []):
-            raise Exception(f"⚠️ Mail.td সার্ভারে কোনো API সেটআপ করা নেই! দয়া করে অ্যাডমিন প্যানেল থেকে API Token অ্যাড করুন।")
-            
-        failed_tokens = set()
-        for _ in range(len(api_data.get(token_key, []))):
-            try:
-                client, token = get_active_client(exclude_tokens=failed_tokens)
-                domains = client.accounts.list_domains()
-                domain_name = domains[0].domain if hasattr(domains[0], 'domain') else domains[0]
-                email_address = f"{clean_name}@{domain_name}" if clean_name else f"{''.join(random.choices(string.ascii_lowercase + string.digits, k=8))}@{domain_name}"
-                account = client.accounts.create(email_address, password="propassword123")
-                return account.id, account.address, token, 'mailtd'
-            except Exception as e:
-                error_msg = str(e).lower()
-                if clean_name and ("already exists" in error_msg or "taken" in error_msg or "400" in error_msg):
-                    raise Exception("NameTaken")
-                if 'token' in locals(): failed_tokens.add(token)
-
-        raise Exception(f"All Mail.td APIs Failed! (Server Timeout or Keys Exhausted)")
+    raise Exception(f"All Servers Failed! Last Status: {last_error}")
 
 def delete_old_mail(chat_id):
     """Old মেইল এবং চ্যাটের মেসেজ মুছে ডাটাবেস ফ্রেশ করার ফাংশন"""
-    if str(chat_id) in user_data and user_data[str(chat_id)]['accounts']:
+    if str(chat_id) in user_data and user_data[str(chat_id)].get('accounts'):
         old_acc = user_data[str(chat_id)]['accounts'][0]
         for msg_id in old_acc.get('msg_ids', []):
             try: bot.delete_message(chat_id, msg_id)
@@ -389,7 +407,7 @@ def extract_and_format(subject, text_body, html_body=""):
     return extracted_otp, html.escape(display_body[:800]), extracted_link
 
 def generate_mail_layout(email_address, srv_type='mailtd'):
-    srv_name = "Mail.gw API" if srv_type == 'mailgw' else "Premium Mail.td API"
+    srv_name = "Mail.gw API" if srv_type == 'mailgw' else "Inboxes.com API" if srv_type == 'inboxes' else "Premium Mail.td API"
     layout = (
         f"🎉 <b>Premium Mail Generated!</b>\n\n"
         f"📧 <b>Your Address :</b>\n"
@@ -447,6 +465,30 @@ def check_mail_for_account(chat_id, account):
                                 'text': fm.get('text', ''),
                                 'html': html_str
                             })
+                            
+        elif srv_type == 'inboxes':
+            login, domain = account_id.split(':')
+            resp = requests.get(f"https://www.1secmail.com/api/v1/?action=getMessages&login={login}&domain={domain}", timeout=10)
+            if resp.status_code == 200:
+                msgs = resp.json()
+                for msg in msgs:
+                    msg_id = str(msg['id'])
+                    if msg_id not in account['seen_msgs']:
+                        account['seen_msgs'].add(msg_id)
+                        needs_sync = True
+                        for m in user_data[str(chat_id)].get('recent_mails', []):
+                            if m['email'] == email_addr: m['msg_count'] += 1
+                            
+                        full_resp = requests.get(f"https://www.1secmail.com/api/v1/?action=readMessage&login={login}&domain={domain}&id={msg_id}", timeout=10)
+                        if full_resp.status_code == 200:
+                            fm = full_resp.json()
+                            messages_to_process.append({
+                                'subject': fm.get('subject', 'No Subject'),
+                                'sender': fm.get('from', 'Unknown'),
+                                'text': fm.get('textBody', ''),
+                                'html': fm.get('htmlBody', '')
+                            })
+                            
         else:
             if acc_token not in api_clients: api_clients[acc_token] = MailTD(acc_token)
             temp_client = api_clients[acc_token]
@@ -577,7 +619,7 @@ def handle_text(message):
         anim_msg = bot.send_message(chat_id, "<i>🔄 Connecting...</i>")
         time.sleep(0.1)
         
-        srv_disp = "Mail.gw" if user_data[chat_id].get('server_pref') == 'mailgw' else "Mail.td"
+        srv_disp = "Mail.gw" if user_data[chat_id].get('server_pref') == 'mailgw' else "Inboxes.com" if user_data[chat_id].get('server_pref') == 'inboxes' else "Mail.td"
         bot.edit_message_text(f"<i>⚡ Allocating {srv_disp} Server...</i>", chat_id, anim_msg.message_id)
         
         try:
@@ -616,7 +658,8 @@ def handle_text(message):
         markup = InlineKeyboardMarkup(row_width=1)
         markup.add(
             InlineKeyboardButton(f"{'✅' if curr_srv == 'mailtd' else '⬜'} Mail.td (Premium)", callback_data="set_srv_mailtd"),
-            InlineKeyboardButton(f"{'✅' if curr_srv == 'mailgw' else '⬜'} Mail.gw (Anonymous)", callback_data="set_srv_mailgw")
+            InlineKeyboardButton(f"{'✅' if curr_srv == 'mailgw' else '⬜'} Mail.gw (Anonymous)", callback_data="set_srv_mailgw"),
+            InlineKeyboardButton(f"{'✅' if curr_srv == 'inboxes' else '⬜'} Inboxes.com (Ultra Fast)", callback_data="set_srv_inboxes")
         )
         bot.send_message(chat_id, srv_text, reply_markup=markup)
 
@@ -626,7 +669,7 @@ def handle_text(message):
             bot.send_message(chat_id, "⚠️ আপনার কোনো অ্যাক্টিভ মেইল নেই।")
         else:
             acc = accounts[0]
-            srv_disp = "Mail.gw" if acc.get('server_type') == 'mailgw' else "Mail.td"
+            srv_disp = "Mail.gw" if acc.get('server_type') == 'mailgw' else "Inboxes.com" if acc.get('server_type') == 'inboxes' else "Mail.td"
             dash_text = f"🗂️ <b>Your Active Mail Dashboard</b>\n\n1. <code>{acc['email']}</code>\n└ Status: 🟢 Active ({srv_disp})"
             markup = InlineKeyboardMarkup(row_width=1)
             markup.add(InlineKeyboardButton("🗑️ Delete Mail", callback_data="dash_del_mail"))
@@ -648,7 +691,7 @@ def handle_text(message):
     elif text == "⚡ About System":
         about_text = (
             "🚀 <b>Premium Temp Mail Bot</b>\n\n"
-            "• Engine: MailTD & Mail.GW Architecture\n"
+            "• Engine: MailTD, MailGW & Inboxes Architecture\n"
             "• Performance: Multi-threaded Zero-Lag Sync\n"
             "• Developer: <a href='https://t.me/Ad_Walid'>Md Walid</a>\n"
             "• Bot Admin: <a href='https://t.me/Ad_Walid'>Md Walid</a>\n\n"
@@ -843,14 +886,16 @@ def handle_callback(call):
         new_pref = call.data.split('_')[2]
         user_data[chat_id]['server_pref'] = new_pref
         save_user_data(chat_id)
-        srv_name = "Mail.gw" if new_pref == "mailgw" else "Mail.td"
-        bot.answer_callback_query(call.id, f"Server Updated to {srv_name}!")
+        
+        srv_name = "Mail.gw" if new_pref == "mailgw" else "Inboxes.com" if new_pref == "inboxes" else "Mail.td"
+        bot.answer_callback_query(call.id, f"✅ Server Updated to {srv_name}!", show_alert=True)
         
         curr_srv = new_pref
         markup = InlineKeyboardMarkup(row_width=1)
         markup.add(
             InlineKeyboardButton(f"{'✅' if curr_srv == 'mailtd' else '⬜'} Mail.td (Premium)", callback_data="set_srv_mailtd"),
-            InlineKeyboardButton(f"{'✅' if curr_srv == 'mailgw' else '⬜'} Mail.gw (Anonymous)", callback_data="set_srv_mailgw")
+            InlineKeyboardButton(f"{'✅' if curr_srv == 'mailgw' else '⬜'} Mail.gw (Anonymous)", callback_data="set_srv_mailgw"),
+            InlineKeyboardButton(f"{'✅' if curr_srv == 'inboxes' else '⬜'} Inboxes.com (Ultra Fast)", callback_data="set_srv_inboxes")
         )
         bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=markup)
             
@@ -942,13 +987,14 @@ def handle_callback(call):
             total_users = len(user_data)
             active_accounts = sum(len(d.get('accounts', [])) for d in user_data.values())
             
-            mtd = mgw = 0
+            mtd = mgw = inb = 0
             for d in user_data.values():
                 for acc in d.get('accounts', []):
                     if acc.get('server_type') == 'mailgw': mgw += 1
+                    elif acc.get('server_type') == 'inboxes': inb += 1
                     else: mtd += 1
                     
-            stats = f"📊 <b>Bot Live Statistics</b>\n\n👥 Total Users: <b>{total_users}</b>\n🚫 Suspended Users: <b>{len(banned_users)}</b>\n\n📧 Total Mails Gen: <b>{bot_stats['total_mails_generated']}</b>\n🟢 Current Active Mails: <b>{active_accounts}</b>\n\n🌐 Server Usage Distribution:\n- MailTD Base: <b>{mtd}</b>\n- Mail.GW Base: <b>{mgw}</b>"
+            stats = f"📊 <b>Bot Live Statistics</b>\n\n👥 Total Users: <b>{total_users}</b>\n🚫 Suspended Users: <b>{len(banned_users)}</b>\n\n📧 Total Mails Gen: <b>{bot_stats['total_mails_generated']}</b>\n🟢 Current Active Mails: <b>{active_accounts}</b>\n\n🌐 Server Usage Distribution:\n- MailTD Base: <b>{mtd}</b>\n- Mail.GW Base: <b>{mgw}</b>\n- Inboxes.com Base: <b>{inb}</b>"
             bot.edit_message_text(stats, chat_id, call.message.message_id, reply_markup=get_back_button())
             
         elif call.data == "admin_users":
@@ -996,7 +1042,7 @@ if __name__ == "__main__":
     load_all_data_from_firebase()
     threading.Thread(target=run_web_server, daemon=True).start()
     threading.Thread(target=auto_check_mail, daemon=True).start()
-    print("🚀 Pro Mail Bot (Updated Multi-Threaded V3) is Live...")
+    print("🚀 Pro Mail Bot (Failover + Inboxes Update) is Live...")
     while True:
         try: bot.polling(none_stop=True, interval=0, timeout=20)
         except Exception: time.sleep(5)
