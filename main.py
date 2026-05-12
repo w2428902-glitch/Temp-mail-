@@ -34,7 +34,7 @@ except Exception as e:
     db = None
 
 # --- Configuration & Master Admin ---
-TOKEN = '8702711931:AAFoQ8x9uwu9t44mgJcL3O4pIq25vp7t1GQ'
+TOKEN = 'Your Bot টোকেন'
 # Thread Pool 50 থেকে কমিয়ে 15 করা হয়েছে (Render 512MB RAM Limit এর জন্য)
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML', num_threads=15)
 
